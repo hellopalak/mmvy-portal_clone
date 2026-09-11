@@ -1,0 +1,17 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: mmvy-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: mmvy_portal
+      POSTGRES_USER: mmvy_user
+      POSTGRES_PASSWORD: change_this_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - mmvy_postgres_data:/var/lib/postgresql/data
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+
+volumes:
+  mmvy_postgres_data:
