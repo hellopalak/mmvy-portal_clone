@@ -1,0 +1,18 @@
+{
+  "name": "mmvy-department-backend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "MMVY departmental system backend simulator for MahaSetu integration",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "pg": "^8.23.0",
+    "socket.io": "^4.8.1"
+  }
+}
