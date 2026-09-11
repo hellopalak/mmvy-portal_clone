@@ -1,7 +1,5 @@
 node_modules/
 client/dist/
 .npm-cache/
-.local-postgres/
 .env
-.env.local
 npm-debug.log*

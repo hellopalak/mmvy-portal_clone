@@ -16,22 +16,30 @@ For the partner-specific UI flow and endpoints, see [PARTNER_PORTAL.md](PARTNER_
 
 | Interface | What it does | Data source |
 | --- | --- | --- |
-| MMVY portal | Applies for MMVY, views profile and updates profile | `users` + `applications` |
-| Partner / second portal | Looks up the same MMVY profile and can create its own application | the same tables, marked `SERVICE_PORTAL` |
-| API Setu | Returns shareable user data by `userId` | the same tables, no duplicate data |
+| MMVY portal | Applies for MMVY, views profile and updates profile | `mmvy_users` + `mmvy_applications` |
+| Partner / second portal | Looks up the same MMVY profile and can create its own application | the same `mmvy_*` tables, marked `SERVICE_PORTAL` |
+| API Setu | Returns shareable user data by `userId` | the same `mmvy_*` tables, no duplicate data |
 
 The common fields are `user_id`, identity/contact, address, guardian/category, bank details and academic/application details. `source_portal` keeps the submitting portal traceable while preserving a single shared user record.
 
-## Run locally
+## Run with Neon
 
-For a step-by-step **VS Code + pgAdmin** setup without Docker, follow [RUN_WITH_PGADMIN.md](RUN_WITH_PGADMIN.md).
+The API only accepts a Neon PostgreSQL connection string. Applications, user profiles, and access events are never stored in a local database or browser storage.
 
-1. Install Node.js 20+ and Docker Desktop.
-2. Create or edit `.env`. Keep `DATABASE_URL` consistent with `docker-compose.yml`, set `CORS_ORIGIN=http://localhost:5173` for direct browser calls, and set a proper `API_SETU_KEY`. The required keys and a safe local example are in [END_TO_END_DOCUMENTATION.md](END_TO_END_DOCUMENTATION.md#6-run-the-full-project-locally).
-3. Start PostgreSQL:
+1. Create a Neon database and copy its connection string from the Neon dashboard.
+2. Create `.env` in the project root:
+
+   ```env
+   PORT=3000
+   DATABASE_URL=postgresql://USER:PASSWORD@ep-your-project.aws.neon.tech/neondb?sslmode=require
+   CORS_ORIGIN=http://localhost:5173
+   API_SETU_KEY=use-a-long-random-key
+   ```
+
+3. Create or update the Neon tables:
 
    ```powershell
-   docker compose up -d
+   npm run db:init
    ```
 
 4. Install the API and frontend packages. Start each service in a separate terminal:
@@ -43,16 +51,9 @@ For a step-by-step **VS Code + pgAdmin** setup without Docker, follow [RUN_WITH_
     npm run client:dev
     ```
 
-5. Open `http://localhost:5173`. Vite proxies `/api` and `/api-setu` calls to the Express API at `http://localhost:3000`.
+5. Open `http://localhost:5173`. Vite proxies `/api` and `/api-setu` calls to the Express API at `http://localhost:3000`; that API writes to Neon.
 
 For a production frontend bundle, run `npm run client:build`. Serve the generated `client/dist/` directory with a static web server, and set `VITE_API_URL` to the API origin if it is on another host.
-
-To reset a local development database, stop the stack and remove only this project's named volume, then start it again:
-
-```powershell
-docker compose down -v
-docker compose up -d
-```
 
 ## User-facing flow
 

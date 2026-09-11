@@ -1,12 +1,16 @@
-require('dotenv').config();
-
+const path = require('path');
+const dotenv = require('dotenv');
 const express = require('express');
 const cors = require('cors');
 const { Pool } = require('pg');
+const { neonConnectionOptions } = require('../db/neon');
+
+const projectRoot = path.resolve(__dirname, '..');
+dotenv.config({ path: path.join(projectRoot, '.env') });
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const pool = new Pool(neonConnectionOptions());
 
 const allowedOrigins = (process.env.CORS_ORIGIN || '')
   .split(',')
@@ -77,36 +81,39 @@ function assertApplication(application = {}) {
 }
 
 async function nextReference(client, kind) {
-  const sequence = kind === 'user' ? 'shared_user_ref_seq' : 'shared_application_ref_seq';
+  const sequence = kind === 'user' ? 'mmvy_shared_user_ref_seq' : 'mmvy_shared_application_ref_seq';
   const prefix = kind === 'user' ? 'MMVY-' : 'APP-';
   const result = await client.query(`SELECT nextval('${sequence}') AS value`);
   return `${prefix}${String(result.rows[0].value).padStart(8, '0')}`;
 }
 
 async function saveProfile(client, profile, requestedUserId) {
-  let userId = requestedUserId || null;
-  if (userId) {
-    const current = await client.query('SELECT user_id FROM users WHERE user_id = $1', [userId]);
+  if (requestedUserId) {
+    const current = await client.query('SELECT user_id FROM mmvy_users WHERE user_id = $1', [requestedUserId]);
     if (current.rowCount) {
       const supplied = profileFields.filter((field) => Object.prototype.hasOwnProperty.call(profile, field));
       if (supplied.length) {
-        const assignments = supplied.map((field, index) => `${field} = $${index + 2}`);
+        const assignments = [...supplied.map((field, index) => `${field} = $${index + 2}`), 'updated_at = NOW()'];
         await client.query(
-          `UPDATE users SET ${assignments.join(', ')} WHERE user_id = $1`,
-          [userId, ...supplied.map((field) => profile[field])]
+          `UPDATE mmvy_users SET ${assignments.join(', ')} WHERE user_id = $1`,
+          [requestedUserId, ...supplied.map((field) => profile[field])]
         );
       }
-      return userId;
+      return requestedUserId;
     }
+
+    const error = new Error('The supplied MMVY User ID was not found. Leave it blank to create a new user.');
+    error.status = 404;
+    throw error;
   }
 
   assertNewProfile(profile);
-  userId = userId || await nextReference(client, 'user');
+  const userId = await nextReference(client, 'user');
   const columns = ['user_id', ...profileFields];
   const values = [userId, ...profileFields.map((field) => profile[field] ?? null)];
   const markers = columns.map((_, index) => `$${index + 1}`);
   await client.query(
-    `INSERT INTO users (${columns.join(', ')}) VALUES (${markers.join(', ')})`,
+    `INSERT INTO mmvy_users (${columns.join(', ')}) VALUES (${markers.join(', ')})`,
     values
   );
   return userId;
@@ -122,8 +129,8 @@ async function getUser(userId, sharedView = false) {
       COALESCE((SELECT jsonb_agg(
         CASE WHEN $2::boolean THEN (to_jsonb(a) - 'extra_details') ELSE to_jsonb(a) END
         ORDER BY a.submitted_at DESC
-      ) FROM applications a WHERE a.user_id = u.user_id), '[]'::jsonb) AS applications
-     FROM users u WHERE u.user_id = $1`,
+      ) FROM mmvy_applications a WHERE a.user_id = u.user_id), '[]'::jsonb) AS applications
+     FROM mmvy_users u WHERE u.user_id = $1`,
     [userId, sharedView]
   );
   return result.rows[0] || null;
@@ -131,7 +138,7 @@ async function getUser(userId, sharedView = false) {
 
 async function recordAccess(userId, consumer, eventType, metadata = {}) {
   await pool.query(
-    'INSERT INTO portal_access_events (user_id, consumer, event_type, metadata) VALUES ($1, $2, $3, $4)',
+    'INSERT INTO mmvy_portal_access_events (user_id, consumer, event_type, metadata) VALUES ($1, $2, $3, $4)',
     [userId, consumer, eventType, metadata]
   );
 }
@@ -153,8 +160,8 @@ async function listUsers(_req, res, next) {
   try {
     const result = await pool.query(`
       SELECT u.*, COALESCE((SELECT jsonb_agg(to_jsonb(a) ORDER BY a.submitted_at DESC)
-        FROM applications a WHERE a.user_id = u.user_id), '[]'::jsonb) AS applications
-      FROM users u ORDER BY u.updated_at DESC`);
+        FROM mmvy_applications a WHERE a.user_id = u.user_id), '[]'::jsonb) AS applications
+      FROM mmvy_users u ORDER BY u.updated_at DESC`);
     res.json({ count: result.rowCount, data: result.rows });
   } catch (error) { next(error); }
 }
@@ -176,9 +183,9 @@ async function updateUser(req, res, next) {
     const profile = normaliseProfile(req.body);
     const supplied = profileFields.filter((field) => Object.prototype.hasOwnProperty.call(profile, field));
     if (!supplied.length) return res.status(400).json({ error: 'No supported profile fields were supplied.' });
-    const assignments = supplied.map((field, index) => `${field} = $${index + 2}`);
+    const assignments = [...supplied.map((field, index) => `${field} = $${index + 2}`), 'updated_at = NOW()'];
     const result = await pool.query(
-      `UPDATE users SET ${assignments.join(', ')} WHERE user_id = $1 RETURNING *`,
+      `UPDATE mmvy_users SET ${assignments.join(', ')} WHERE user_id = $1 RETURNING *`,
       [req.params.userId, ...supplied.map((field) => profile[field])]
     );
     if (!result.rowCount) return res.status(404).json({ error: 'User not found.' });
@@ -209,11 +216,11 @@ async function createApplication(req, res, next, sourcePortal) {
       cleanValue(application.schemeName) || 'Mukhyamantri Medhavi Vidyarthi Yojana',
       cleanValue(application.academicYear), cleanValue(application.instituteName), cleanValue(application.instituteCode),
       cleanValue(application.instituteType), cleanValue(application.courseName), cleanValue(application.courseType),
-      cleanValue(application.admissionDate), cleanValue(application.qualifyingExam), application.qualifyingPercentage || null,
-      application.familyAnnualIncome || null, true, JSON.stringify(extraDetails)
+      cleanValue(application.admissionDate), cleanValue(application.qualifyingExam), cleanValue(application.qualifyingPercentage),
+      cleanValue(application.familyAnnualIncome), true, JSON.stringify(extraDetails)
     ];
     const result = await client.query(`
-      INSERT INTO applications (
+      INSERT INTO mmvy_applications (
         application_id, user_id, source_portal, application_type, scheme_name, academic_year,
         institute_name, institute_code, institute_type, course_name, course_type, admission_date,
         qualifying_exam, qualifying_percentage, family_annual_income, consent_given, extra_details
@@ -263,19 +270,19 @@ app.use((error, _req, res, _next) => {
   console.error(error);
   if (error.code === '28P01') {
     return res.status(503).json({
-      error: 'PostgreSQL login failed. Make the mmvy_user password in pgAdmin match DATABASE_URL in .env, then restart the Node server.',
+      error: 'Neon PostgreSQL login failed. Verify DATABASE_URL in .env, then restart the Node server.',
       code: 'POSTGRES_LOGIN_FAILED'
     });
   }
   if (error.code === '3D000') {
     return res.status(503).json({
-      error: 'Database mmvy_portal was not found. Create it in pgAdmin, run db/schema.sql, then restart the Node server.',
+      error: 'The configured Neon database was not found. Verify DATABASE_URL and run npm run db:init, then restart the Node server.',
       code: 'DATABASE_NOT_FOUND'
     });
   }
   if (['ECONNREFUSED', 'ENOTFOUND', 'ETIMEDOUT', '57P01'].includes(error.code)) {
     return res.status(503).json({
-      error: 'PostgreSQL is unavailable. Start the PostgreSQL Windows service or Docker database, then restart the Node server.',
+      error: 'Neon PostgreSQL is unavailable. Verify DATABASE_URL and network access, then restart the Node server.',
       code: 'DATABASE_UNAVAILABLE'
     });
   }

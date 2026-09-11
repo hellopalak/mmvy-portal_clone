@@ -33,7 +33,7 @@ Partner Portal UI
 | `client/src/App.jsx` | Selects `PartnerPage` when the current view is `partner`, and passes `SERVICE_PORTAL` when navigating to the partner form. |
 | `client/src/api.js` | Calls the backend with `fetch`; `getProfile` URL-encodes the user ID. |
 | `server/server.js` | Implements both partner routes and stores the audit entry. |
-| `db/schema.sql` | Defines the shared `users`, `applications`, and `portal_access_events` tables. |
+| `db/schema.sql` | Defines the shared `mmvy_users`, `mmvy_applications`, and `mmvy_portal_access_events` tables. |
 
 ## User flow in the UI
 
@@ -63,9 +63,9 @@ GET /api/partner/users/MMVY-00010001
 
 What the server does:
 
-1. Loads the user from `users` and that user's applications from `applications`.
+1. Loads the user from `mmvy_users` and that user's applications from `mmvy_applications` in Neon.
 2. Returns `404` if the user does not exist.
-3. Inserts an audit row into `portal_access_events` with:
+3. Inserts an audit row into `mmvy_portal_access_events` with:
    - `consumer = SERVICE_PORTAL`
    - `event_type = PROFILE_LOOKUP`
 4. Returns the full profile and applications.
@@ -154,9 +154,9 @@ Success response:
 
 | Action | Reads/writes | Result |
 | --- | --- | --- |
-| Partner lookup | Reads `users` and `applications`; writes `portal_access_events` | Shows the shared profile and logs the lookup. |
-| Partner submission for an existing user | Updates supplied `users` fields; inserts `applications` | The new application is marked `SERVICE_PORTAL`. |
-| Partner submission for a new user | Inserts `users` and `applications` | Creates a shared profile and a partner-marked application. |
+| Partner lookup | Reads `mmvy_users` and `mmvy_applications`; writes `mmvy_portal_access_events` | Shows the shared profile and logs the lookup. |
+| Partner submission for an existing user | Updates supplied `mmvy_users` fields; inserts `mmvy_applications` | The new application is marked `SERVICE_PORTAL`. |
+| Partner submission for a new user | Inserts `mmvy_users` and `mmvy_applications` | Creates a shared profile and a partner-marked application. |
 
 All applications remain visible in the normal MMVY profile because the profile query returns every application belonging to that `user_id`, ordered by newest submission first.
 
@@ -164,4 +164,4 @@ All applications remain visible in the normal MMVY profile because the profile q
 
 The partner endpoints currently have no partner login, role check, API key, or user-consent check beyond the application form's consent checkbox. In particular, the lookup route returns complete profile data, including sensitive data. Before exposing this to real partner organisations, add partner authentication, permissions scoped to the partner and user, TLS, rate limiting, and an audit-retention policy.
 
-Also note that an unknown `userId` supplied to the submit endpoint is accepted as a new ID by the current code. A production implementation should generate IDs on the server and reject untrusted arbitrary IDs.
+An unknown `userId` supplied to the submit endpoint is rejected. New users receive a server-generated MMVY user ID.

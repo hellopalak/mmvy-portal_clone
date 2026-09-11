@@ -7,9 +7,9 @@ This is a working prototype for the **Mukhyamantri Medhavi Vidyarthi Yojana (MMV
 ```text
 React browser portal ──┐
 Partner portal ────────┼──> Express API ──> PostgreSQL
-API Setu client ───────┘       :3000          users
-                                              applications
-                                              portal_access_events
+API Setu client ───────┘       :3000          mmvy_users
+                                              mmvy_applications
+                                              mmvy_portal_access_events
 ```
 
 The data is not copied between portals. `source_portal` on each application records whether it was submitted by `MMVY` or `SERVICE_PORTAL`.
@@ -21,9 +21,9 @@ The data is not copied between portals. `source_portal` on each application reco
 | `client/` | React 18 + Vite single-page UI, normally served on `http://localhost:5173` during development. |
 | `client/src/api.js` | Browser API helper. It calls the backend and turns non-2xx responses into errors. |
 | `server/server.js` | Express server, input handling, validation, API routes and PostgreSQL queries. |
-| `db/schema.sql` | Tables, ID sequences, database constraints, indexes and update-time triggers. |
-| `docker-compose.yml` | Optional local PostgreSQL 16 container. |
-| `.env` | Local server configuration and secrets; do not commit its real values. |
+| `db/schema.sql` | Portal tables, ID sequences, constraints and indexes. `mmvy_*` names avoid collisions with other application tables. |
+| `db/neon.js` | Validates that the database host is Neon and supplies required TLS connection settings. |
+| `.env` | Server configuration and secrets, including the Neon `DATABASE_URL`; do not commit its real values. |
 
 The backend does **not** serve the React application. In development, Vite proxies `/api` and `/api-setu` from port 5173 to the Express server on port 3000.
 
@@ -45,14 +45,14 @@ If an existing `userId` is supplied, the server uses that record and creates ano
 1. **My Profile** calls `GET /api/users/:userId`.
 2. The response contains the user record and all of that user's applications, newest first.
 3. **Update Information** sends `PATCH /api/mmvy/users/:userId` with the fields from the edit form.
-4. PostgreSQL's trigger updates `users.updated_at` automatically.
+4. The API updates `mmvy_users.updated_at` as part of the same Neon database update.
 
 ### Partner portal
 
 1. The partner enters an MMVY user ID.
 2. The UI calls `GET /api/partner/users/:userId`.
-3. The server reads the same `users` and `applications` records and writes a `PROFILE_LOOKUP` event to `portal_access_events`.
-4. A partner application uses `POST /api/partner/applications`; it is saved in the same `applications` table with `source_portal = SERVICE_PORTAL`.
+3. The server reads the same `mmvy_users` and `mmvy_applications` records and writes a `PROFILE_LOOKUP` event to `mmvy_portal_access_events`.
+4. A partner application uses `POST /api/partner/applications`; it is saved in the same `mmvy_applications` table with `source_portal = SERVICE_PORTAL`.
 
 ### API Setu lookup
 
@@ -127,7 +127,7 @@ The browser sends this shape. Profile keys may use the documented camelCase name
 }
 ```
 
-Omit `userId` for a new person. An unknown supplied `userId` is created unchanged by the current code; a production system should not trust a client-provided identifier this way. On a new profile, `firstName`, `mobile`, and `addressLine1` are mandatory. On every application, `academicYear`, `instituteName`, `courseName`, and `consentGiven: true` are mandatory. The server accepts further application fields such as `instituteCode`, `admissionDate`, `qualifyingPercentage`, `familyAnnualIncome`, and an object in `extraDetails`.
+Omit `userId` for a new person. When supplied, it must already exist; the server otherwise returns `404` so client-provided IDs cannot create arbitrary shared profiles. On a new profile, `firstName`, `mobile`, and `addressLine1` are mandatory. On every application, `academicYear`, `instituteName`, `courseName`, and `consentGiven: true` are mandatory. The server accepts further application fields such as `instituteCode`, `admissionDate`, `qualifyingPercentage`, `familyAnnualIncome`, and an object in `extraDetails`.
 
 ### Profile fields accepted by `PATCH`
 
@@ -135,7 +135,7 @@ Omit `userId` for a new person. An unknown supplied `userId` is created unchange
 
 Blank strings are stored as `null`; unsupported fields are ignored. Database rules reject an invalid mobile number, a non-six-digit pincode, invalid Aadhaar last four digits, percentages outside 0–100, or negative income.
 
-### Useful local tests (PowerShell)
+### Useful API checks (PowerShell)
 
 ```powershell
 Invoke-RestMethod http://localhost:3000/api/health
@@ -143,32 +143,32 @@ Invoke-RestMethod http://localhost:3000/api/users
 
 Invoke-RestMethod -Method Get `
   -Uri 'http://localhost:3000/api-setu/users/MMVY-00010001' `
-  -Headers @{ 'x-api-setu-key' = 'your-local-api-setu-key' }
+  -Headers @{ 'x-api-setu-key' = 'your-api-setu-key' }
 ```
 
 ## 5. Database model
 
 | Table | Stores | Important details |
 | --- | --- | --- |
-| `users` | Canonical identity, contact, address and bank profile | `user_id` is the stable shared identifier. |
-| `applications` | MMVY and partner applications | References `users.user_id`; has portal source, type, status, consent and JSON `extra_details`. |
-| `portal_access_events` | Partner and API Setu lookup audit entries | Records consumer, event type, time and optional JSON metadata. |
+| `mmvy_users` | Canonical identity, contact, address and bank profile | `user_id` is the stable shared identifier. |
+| `mmvy_applications` | MMVY and partner applications | References `mmvy_users.user_id`; has portal source, type, status, consent and JSON `extra_details`. |
+| `mmvy_portal_access_events` | Partner and API Setu lookup audit entries | Records consumer, event type, time and optional JSON metadata. |
 
-Sequences generate the numeric part of the IDs. `applications.user_id` is a foreign key to `users.user_id`, and database triggers refresh `updated_at` after updates.
+Sequences generate the numeric part of the IDs. `mmvy_applications.user_id` is a foreign key to `mmvy_users.user_id`; the API refreshes `updated_at` when it changes a profile.
 
-## 6. Run the full project locally
+## 6. Run the project with Neon
 
-1. Ensure PostgreSQL is available, either through your local PostgreSQL installation or Docker Desktop.
-2. Configure `.env` with these keys. `DATABASE_URL` must point to the same database and credentials that you initialise:
+1. Create a Neon PostgreSQL database and copy its connection string from the Neon dashboard.
+2. Configure `.env` with these keys. `DATABASE_URL` must point to the Neon database that stores the portal data. The server rejects local PostgreSQL connection strings.
 
    ```env
    PORT=3000
-   DATABASE_URL=postgresql://mmvy_user:your-password@localhost:5432/mmvy_portal
+   DATABASE_URL=postgresql://USER:PASSWORD@ep-your-project.aws.neon.tech/neondb?sslmode=require
    CORS_ORIGIN=http://localhost:5173
-   API_SETU_KEY=use-a-long-random-local-key
+   API_SETU_KEY=use-a-long-random-key
    ```
 
-3. Initialise the schema once. With Docker, run `docker compose up -d`; the schema is loaded automatically into a new project volume. With a local PostgreSQL installation, create the database and run `db/schema.sql` (or run `node db/init.js` after setting `DATABASE_URL`). The initializer is safe to rerun: it creates missing ID sequences and synchronizes them above existing IDs.
+3. Initialise the Neon schema once with `npm run db:init`. The initializer is safe to rerun: it creates missing tables and ID sequences and synchronizes the sequences above existing IDs.
 4. In one terminal, install and run the API:
 
    ```powershell
@@ -183,7 +183,14 @@ Sequences generate the numeric part of the IDs. `applications.user_id` is a fore
    npm run client:dev
    ```
 
-6. Open `http://localhost:5173`. For a deployable client bundle, run `npm run client:build`; configure `VITE_API_URL` when the API is on a different origin.
+6. Open `http://localhost:5173`. The API runs locally for development, but all portal data is stored in Neon. For a deployable client bundle, run `npm run client:build`; configure `VITE_API_URL` when the API is on a different origin.
+
+The end-to-end check creates and removes a temporary Neon record. Run it only against a test database:
+
+```powershell
+$env:E2E_ALLOW_NEON_WRITE = 'true'
+npm run test:e2e
+```
 
 ## 7. Important prototype limits
 
