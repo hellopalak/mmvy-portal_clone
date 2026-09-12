@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { api } from '../api';
 import { Input, Select } from '../components/FormFields';
 import StatusMessage from '../components/StatusMessage';
@@ -6,6 +7,52 @@ import { categoryButtons, dateValue, profileFromForm } from '../utils';
 export default function ApplicationPage({ source, profile, navigate, flash, setFlash, setProfile }) {
   const isPartner = source === 'SERVICE_PORTAL';
   const p = profile || {};
+  const [fetchingMahaSetu, setFetchingMahaSetu] = useState(false);
+  const [mahasetuBanner, setMahasetuBanner] = useState(null);
+
+  async function fetchFromMahaSetu() {
+    setFetchingMahaSetu(true);
+    setMahasetuBanner(null);
+    try {
+      const form = document.querySelector('form');
+      const userId = form?.elements?.userId?.value?.trim() || 'MMVY-00010001';
+
+      const res = await api('/api/mahasetu/fetch-data', {
+        method: 'POST',
+        body: JSON.stringify({
+          userId,
+          requestedFields: ['ADDRESS', 'INCOME'],
+        }),
+      });
+
+      if (res?.data) {
+        if (form) {
+          if (res.data.address_line1 && form.elements.addressLine1) form.elements.addressLine1.value = res.data.address_line1;
+          if (res.data.address_line2 && form.elements.addressLine2) form.elements.addressLine2.value = res.data.address_line2;
+          if (res.data.village_or_ward && form.elements.villageOrWard) form.elements.villageOrWard.value = res.data.village_or_ward;
+          if (res.data.city && form.elements.city) form.elements.city.value = res.data.city;
+          if (res.data.district && form.elements.district) form.elements.district.value = res.data.district;
+          if (res.data.state && form.elements.state) form.elements.state.value = res.data.state;
+          if (res.data.pincode && form.elements.pincode) form.elements.pincode.value = res.data.pincode;
+          if (res.data.family_annual_income && form.elements.familyAnnualIncome) form.elements.familyAnnualIncome.value = res.data.family_annual_income;
+        }
+
+        setMahasetuBanner({
+          success: true,
+          requestId: res.requestId,
+          sources: res.metadata?.source || 'API Setu Gateway (National Standards Gateway)',
+        });
+      }
+    } catch (err) {
+      console.error('Failed to fetch from MahaSetu:', err);
+      setMahasetuBanner({
+        success: false,
+        error: err.message || 'Could not connect to MahaSetu Hub',
+      });
+    } finally {
+      setFetchingMahaSetu(false);
+    }
+  }
   async function submit(event) {
     event.preventDefault();
     const form = event.currentTarget;
@@ -49,7 +96,69 @@ export default function ApplicationPage({ source, profile, navigate, flash, setF
         <Select name="category" label="Category" values={['General', 'OBC', 'SC', 'ST', 'EWS'].map((value) => [value, value])} selected={p.category || ''} />
         <Input name="aadhaarLast4" label="Aadhaar last 4 digits only" defaultValue={p.aadhaar_last4 || ''} placeholder="1234" maxLength="4" />
       </div></section>
-      <section className="form-card"><h2>2. Address and Bank Information</h2><p className="form-hint">These fields are common to every connected portal for this user.</p><div className="form-grid three">
+      <section className="form-card">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px', marginBottom: '8px' }}>
+          <h2 style={{ margin: 0 }}>2. Address and Bank Information</h2>
+          <button
+            type="button"
+            onClick={fetchFromMahaSetu}
+            disabled={fetchingMahaSetu}
+            style={{
+              background: 'linear-gradient(135deg, #1e40af, #2563eb)',
+              color: '#ffffff',
+              border: 'none',
+              padding: '7px 14px',
+              borderRadius: '6px',
+              fontSize: '13px',
+              fontWeight: 600,
+              cursor: fetchingMahaSetu ? 'not-allowed' : 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              boxShadow: '0 2px 4px rgba(37,99,235,0.2)'
+            }}
+          >
+            {fetchingMahaSetu ? 'Fetching from MahaSetu...' : '⚡ Fetch Verified Address & Income via MahaSetu'}
+          </button>
+        </div>
+
+        {mahasetuBanner && mahasetuBanner.success && (
+          <div style={{
+            background: '#ecfdf5',
+            border: '1px solid #6ee7b7',
+            color: '#065f46',
+            padding: '10px 14px',
+            borderRadius: '6px',
+            fontSize: '13px',
+            marginBottom: '14px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px'
+          }}>
+            <span style={{ fontSize: '16px' }}>✓</span>
+            <div>
+              <strong>Verified via MahaSetu Gateway:</strong> Address & Income successfully pre-filled from <strong>{mahasetuBanner.sources}</strong>.
+              <span style={{ marginLeft: '6px', fontSize: '11px', color: '#047857' }}>(Ref: {mahasetuBanner.requestId})</span>
+            </div>
+          </div>
+        )}
+
+        {mahasetuBanner && !mahasetuBanner.success && (
+          <div style={{
+            background: '#fef2f2',
+            border: '1px solid #fca5a5',
+            color: '#991b1b',
+            padding: '10px 14px',
+            borderRadius: '6px',
+            fontSize: '13px',
+            marginBottom: '14px'
+          }}>
+            <strong>MahaSetu Retrieval Error:</strong> {mahasetuBanner.error}
+          </div>
+        )}
+
+        <p className="form-hint">These fields are common to every connected portal for this user.</p>
+        <div className="form-grid three">
         <Input name="addressLine1" label="Address line 1" defaultValue={p.address_line1 || ''} required full maxLength="255" /><Input name="addressLine2" label="Address line 2" defaultValue={p.address_line2 || ''} full maxLength="255" />
         <Input name="villageOrWard" label="Village / Ward" defaultValue={p.village_or_ward || ''} /><Input name="city" label="City / Tehsil" defaultValue={p.city || ''} /><Input name="district" label="District" defaultValue={p.district || ''} />
         <Input name="state" label="State" defaultValue={p.state || 'Madhya Pradesh'} required /><Input name="pincode" label="Pincode" defaultValue={p.pincode || ''} placeholder="6 digits" maxLength="6" /><Input name="bankName" label="Bank name" defaultValue={p.bank_name || ''} />

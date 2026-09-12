@@ -19,7 +19,15 @@ const allowedOrigins = (process.env.CORS_ORIGIN || '')
 
 app.use(cors({
   origin(origin, callback) {
-    if (!origin || allowedOrigins.length === 0 || allowedOrigins.includes(origin)) return callback(null, true);
+    if (
+      !origin ||
+      allowedOrigins.length === 0 ||
+      allowedOrigins.includes(origin) ||
+      origin.startsWith('http://localhost:') ||
+      origin.startsWith('http://127.0.0.1:')
+    ) {
+      return callback(null, true);
+    }
     return callback(new Error('This origin is not allowed to call this API.'));
   }
 }));
@@ -264,6 +272,42 @@ app.get('/api-setu/users/:userId', requireApiSetuKey, async (req, res, next) => 
       data
     });
   } catch (error) { return next(error); }
+});
+
+app.post('/api/mahasetu/fetch-data', async (req, res, next) => {
+  try {
+    const { userId, requestedFields } = req.body || {};
+    const mahasetuUrl = process.env.MAHASETU_BASE_URL || 'http://localhost:3000';
+
+    const response = await fetch(`${mahasetuUrl}/api/data-requests`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        legacy_id: userId || 'MMVY-00010001',
+        department_name: 'MMVY',
+        requested_fields: requestedFields || ['ADDRESS', 'INCOME'],
+        purpose: 'Scholarship Application Verification & Pre-Fill',
+        requesting_department: 'MMVY',
+      }),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      return res.status(response.status).json({
+        error: `MahaSetu returned ${response.status}: ${errText}`,
+      });
+    }
+
+    const data = await response.json();
+    return res.json(data);
+  } catch (error) {
+    console.error('MahaSetu proxy error:', error.message);
+    return res.status(502).json({
+      error: `Unable to communicate with MahaSetu Gateway: ${error.message}`,
+    });
+  }
 });
 
 app.use((error, _req, res, _next) => {

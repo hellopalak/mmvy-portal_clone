@@ -70,7 +70,62 @@ CREATE INDEX IF NOT EXISTS mmvy_portal_access_events_user_created_idx
 DROP TRIGGER IF EXISTS mmvy_users_set_updated_at ON mmvy_users;
 DROP FUNCTION IF EXISTS set_mmvy_users_updated_at();
 
-SELECT setval(
+CREATE OR REPLACE FUNCTION set_mmvy_users_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = NOW();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER mmvy_users_set_updated_at
+BEFORE UPDATE ON mmvy_users
+FOR EACH ROW
+EXECUTE FUNCTION set_mmvy_users_updated_at();
+
+
+DROP TRIGGER IF EXISTS mmvy_users_mahasetu_cdc ON mmvy_users;
+DROP FUNCTION IF EXISTS notify_mmvy_users_mahasetu_cdc();
+
+CREATE OR REPLACE FUNCTION notify_mmvy_users_mahasetu_cdc()
+RETURNS TRIGGER AS $$
+DECLARE
+  changed_fields JSONB;
+BEGIN
+  SELECT COALESCE(
+    jsonb_agg(field_name),
+    '[]'::jsonb
+  )
+  INTO changed_fields
+  FROM (
+    SELECT key AS field_name
+    FROM jsonb_each(to_jsonb(OLD))
+    WHERE to_jsonb(OLD) -> key IS DISTINCT FROM to_jsonb(NEW) -> key
+  ) changed;
+
+  PERFORM pg_notify(
+    'mmvy_mahasetu_cdc',
+    json_build_object(
+      'operation', 'UPDATE',
+      'department_name', 'MMVY',
+      'legacy_id', NEW.user_id,
+      'old_data', to_jsonb(OLD),
+      'new_data', to_jsonb(NEW),
+      'changed_fields', changed_fields
+    )::text
+  );
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS mmvy_users_mahasetu_cdc ON mmvy_users;
+
+CREATE TRIGGER mmvy_users_mahasetu_cdc
+AFTER UPDATE ON mmvy_users
+FOR EACH ROW
+WHEN (OLD.* IS DISTINCT FROM NEW.*)
+EXECUTE FUNCTION notify_mmvy_users_mahasetu_cdc();SELECT setval(
   'mmvy_shared_user_ref_seq',
   GREATEST(
     10001,
